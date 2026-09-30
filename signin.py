@@ -51,6 +51,10 @@ def main():
 
     result = request("POST", "/m/sign/add", session=session)
     if result.get("code") != 200:
+        message = str(result.get("msg", ""))
+        if "已经签到" in message or "已签到" in message:
+            print(f"✅ 无限云盘签到\\n状态：今日已签到\\n连续签到：{sign.get('connectNum', 0)} 天\\n积分：{sign.get('totalPoints', 0)}")
+            return
         raise RuntimeError(f"签到失败: {result.get('msg', result)}")
     data = result.get("data") or {}
     print(f"✅ 无限云盘签到\n状态：签到成功\n连续签到：{data.get('connectNum', sign.get('connectNum', 0))} 天\n积分：{data.get('totalPoints', sign.get('totalPoints', 0))}")
