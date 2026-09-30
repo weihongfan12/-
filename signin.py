@@ -1,131 +1,64 @@
 #!/usr/bin/env python3
+"""无限云盘每日签到，并输出适合 Telegram 的结果。"""
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-    import json
-    import os
-    import sys
-    from datetime import datetime
-    from urllib.error import HTTPError, URLError
-    from urllib.request import Request, urlopen
-    from zoneinfo import ZoneInfo
-                                                                    
-    BASE_URL = "https://api.xbapi.com/v1/app"
-    TIMEZONE = ZoneInfo("Asia/Shanghai")
-                                                                        ACCOUNT = os.environ.get("XB_ACCOUNT", "")
-    PASSWORD = os.environ.get("XB_PASSWORD", "")
+BASE = "https://api.xbapi.com/v1/app"
+ACCOUNT = os.environ.get("XB_ACCOUNT", "")
+PASSWORD = os.environ.get("XB_PASSWORD", "")
 
 
-    def request(method, path, body=None, session_key=""):
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
-        if session_key:
-            headers["thirdSession"] = session_key
-            headers["platform"] = "APP"
-
-        data = None
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-
-        request_obj = Request(
-            BASE_URL + path,
-            data=data,
-            headers=headers,
-            method=method,
-        )
-
-        try:
-            with urlopen(request_obj, timeout=30) as response:
-                return json.loads(response.read().decode("utf-8"))
-
-        except HTTPError as error:
-            detail = error.read().decode("utf-8",
-    errors="replace")[:300]
-            raise RuntimeError(f"HTTP {error.code}: {detail}")
-    from error
-                                                                            except URLError as error:
-            raise RuntimeError(f"网络错误：{error.reason}") from error
+def request(method, path, *, body=None, session=""):
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if session:
+        headers.update({"thirdSession": session, "platform": "APP"})
+    data = None if body is None else json.dumps(body).encode()
+    req = Request(BASE + path, data=data, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=30) as response:
+            return json.loads(response.read().decode())
+    except HTTPError as e:
+        detail = e.read().decode(errors="replace")[:300]
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from e
+    except URLError as e:
+        raise RuntimeError(f"网络错误: {e.reason}") from e
 
 
-    def today_string():
-        return datetime.now(TIMEZONE).strftime("%Y-%m-%d")          
+def main():
+    if not ACCOUNT or not PASSWORD:
+        raise RuntimeError("未配置 XB_ACCOUNT 或 XB_PASSWORD")
 
-    def main():
-        if not ACCOUNT:
-            raise RuntimeError("未配置 GitHub Secret：XB_ACCOUNT")
+    login = request("POST", "/m/user/login", body={"account": ACCOUNT, "password": PASSWORD})
+    if login.get("code") != 200 or not isinstance(login.get("data"), dict):
+        raise RuntimeError(f"登录失败: {login.get('msg', login)}")
+    session = login["data"].get("sessionKey", "")
+    if not session:
+        raise RuntimeError("登录响应中没有 sessionKey")
 
-        if not PASSWORD:
-            raise RuntimeError("未配置 GitHub Secret：XB_PASSWORD")
+    info = request("GET", "/m/sign/info", session=session)
+    if info.get("code") != 200:
+        raise RuntimeError(f"查询签到状态失败: {info.get('msg', info)}")
+    sign = info.get("data") or {}
+    sign_time = str(sign.get("signTime") or "")
+    today = datetime.now().astimezone().date().isoformat()
+    if sign_time[:10] == today:
+        print(f"✅ 无限云盘签到\n状态：今日已签到\n连续签到：{sign.get('connectNum', 0)} 天\n积分：{sign.get('totalPoints', 0)}")
+        return
 
-        login_result = request(                                                 "POST",                                                             "/m/user/login",                                                    body={                                                                  "account": ACCOUNT,                                                 "password": PASSWORD,                                           },                                                              )                                                                                                                                       if login_result.get("code") != 200:                                     raise RuntimeError(
-                "登录失败：" + str(login_result.get("msg",
-    login_result))
-            )
-
-        user_data = login_result.get("data") or {}
-        session_key = user_data.get("sessionKey")
-
-        if not session_key:
-            raise RuntimeError("登录响应中没有 sessionKey")
-
-        sign_info_result = request(
-            "GET",
-            "/m/sign/info",
-            session_key=session_key,
-        )
-
-        if sign_info_result.get("code") != 200:
-            raise RuntimeError(
-                "查询签到状态失败："
-                + str(sign_info_result.get("msg",
-    sign_info_result))
-            )
-
-        sign_info = sign_info_result.get("data") or {}
-        sign_time = str(sign_info.get("signTime") or "")
-
-        if sign_time[:10] == today_string():
-            print(
-                "✅ 无限云盘签到\n"
-                "状态：今日已签到\n"
-                f"连续签到：{sign_info.get('connectNum', 0)} 天\n"
-                f"积分：{sign_info.get('totalPoints', 0)}"
-            )
-            return
-
-        add_sign_result = request(
-            "POST",
-            "/m/sign/add",
-            session_key=session_key,
-        )
-
-        if add_sign_result.get("code") != 200:
-            raise RuntimeError(
-                "签到失败：" + str(add_sign_result.get("msg",
-    add_sign_result))
-            )
-
-        result_data = add_sign_result.get("data") or {}
-
-        print(
-            "✅ 无限云盘签到\n"                                                 "状态：签到成功\n"
-            f"连续签到："
-            f"{result_data.get('connectNum',
-    sign_info.get('connectNum', 0))} 天\n"
-            f"积分："
-            f"{result_data.get('totalPoints',
-    sign_info.get('totalPoints', 0))}"
-        )
+    result = request("POST", "/m/sign/add", session=session)
+    if result.get("code") != 200:
+        raise RuntimeError(f"签到失败: {result.get('msg', result)}")
+    data = result.get("data") or {}
+    print(f"✅ 无限云盘签到\n状态：签到成功\n连续签到：{data.get('connectNum', sign.get('connectNum', 0))} 天\n积分：{data.get('totalPoints', sign.get('totalPoints', 0))}")
 
 
-    if name == "main":
-        try:
-            main()
-        except Exception as error:
-            print(
-                "❌ 无限云盘签到\n"
-                "状态：失败\n"
-                f"原因：{error}"
-            )
-            sys.exit(1)
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        print(f"❌ 无限云盘签到\n状态：失败\n原因：{exc}")
+        sys.exit(1)
